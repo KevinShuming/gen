@@ -4,8 +4,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-
-	"github.com/jimsmart/schema"
 )
 
 type ModelInfo struct {
@@ -14,6 +12,7 @@ type ModelInfo struct {
 	ShortStructName string
 	TableName       string
 	Fields          []string
+	Fields2         []string
 }
 
 // commonInitialisms is a set of common initialisms.
@@ -84,10 +83,43 @@ const (
 	golangTime       = "time.Time"
 )
 
+type TableScheduma struct {
+	COLUMN_NAME    string
+	COLUMN_TYPE    string
+	DATA_TYPE      string
+	IS_NULLABLE    string
+	COLUMN_COMMENT string
+}
+
+func GetColInfo(db *sql.DB, tableName string) (result []TableScheduma) {
+
+	strQuery := `SELECT
+	COLUMN_NAME,
+		COLUMN_TYPE,
+		DATA_TYPE,
+		IS_NULLABLE,
+		COLUMN_COMMENT
+	FROM
+	INFORMATION_SCHEMA.COLUMNS
+	WHERE
+	table_name ='` + tableName + `'`
+
+	rows, _ := db.Query(strQuery)
+	for rows.Next() {
+		var rData TableScheduma
+		rows.Scan(&rData.COLUMN_NAME, &rData.COLUMN_TYPE, &rData.DATA_TYPE, &rData.IS_NULLABLE, &rData.COLUMN_COMMENT)
+		result = append(result, rData)
+	}
+	return
+}
+
 // GenerateStruct generates a struct for the given table.
 func GenerateStruct(db *sql.DB, tableName string, structName string, pkgName string, jsonAnnotation bool, gormAnnotation bool, gureguTypes bool) *ModelInfo {
-	cols, _ := schema.Table(db, tableName)
-	fields := generateFieldsTypes(db, cols, 0, jsonAnnotation, gormAnnotation, gureguTypes)
+	//cols, _ := schema.Table(db, tableName)
+	cols2 := GetColInfo(db, tableName)
+
+	fields := generateFieldsTypes2(db, cols2, 0, jsonAnnotation, gormAnnotation, gureguTypes)
+	//fields2 := generateFieldsTypes2(db, cols2, 0, jsonAnnotation, gormAnnotation, gureguTypes)
 
 	//fields := generateMysqlTypes(db, columnTypes, 0, jsonAnnotation, gormAnnotation, gureguTypes)
 
@@ -103,6 +135,55 @@ func GenerateStruct(db *sql.DB, tableName string, structName string, pkgName str
 }
 
 // Generate fields string
+func generateFieldsTypes2(db *sql.DB, columns []TableScheduma, depth int, jsonAnnotation bool, gormAnnotation bool, gureguTypes bool) []string {
+
+	//sort.Strings(keys)
+
+	var fields []string
+	var field = ""
+	for i, c := range columns {
+		nullable := c.IS_NULLABLE == "YES"
+		key := c.COLUMN_NAME
+		des := "// " + c.COLUMN_COMMENT
+		valueType := sqlTypeToGoType(strings.ToLower(c.DATA_TYPE), nullable, gureguTypes)
+		if valueType == "" { // unknown type
+			continue
+		}
+		fieldName := FmtFieldName(stringifyFirstChar(key))
+
+		var annotations []string
+		if gormAnnotation == true {
+			if i == 0 {
+				annotations = append(annotations, fmt.Sprintf("gorm:\"column:%s;primary_key\"", key))
+			} else {
+				annotations = append(annotations, fmt.Sprintf("gorm:\"column:%s\"", key))
+			}
+
+		}
+		if jsonAnnotation == true {
+			annotations = append(annotations, fmt.Sprintf("json:\"%s\"", strings.ToLower(key)))
+		}
+
+		if len(annotations) > 0 {
+			field = fmt.Sprintf("%s %s `%s` %s",
+				fieldName,
+				valueType,
+				strings.Join(annotations, " "),
+				des,
+			)
+
+		} else {
+			field = fmt.Sprintf("%s %s",
+				fieldName,
+				valueType)
+		}
+
+		fields = append(fields, field)
+	}
+	return fields
+}
+
+// Generate fields string
 func generateFieldsTypes(db *sql.DB, columns []*sql.ColumnType, depth int, jsonAnnotation bool, gormAnnotation bool, gureguTypes bool) []string {
 
 	//sort.Strings(keys)
@@ -112,6 +193,7 @@ func generateFieldsTypes(db *sql.DB, columns []*sql.ColumnType, depth int, jsonA
 	for i, c := range columns {
 		nullable, _ := c.Nullable()
 		key := c.Name()
+
 		valueType := sqlTypeToGoType(strings.ToLower(c.DatabaseTypeName()), nullable, gureguTypes)
 		if valueType == "" { // unknown type
 			continue
@@ -130,6 +212,7 @@ func generateFieldsTypes(db *sql.DB, columns []*sql.ColumnType, depth int, jsonA
 		if jsonAnnotation == true {
 			annotations = append(annotations, fmt.Sprintf("json:\"%s\"", key))
 		}
+
 		if len(annotations) > 0 {
 			field = fmt.Sprintf("%s %s `%s`",
 				fieldName,
